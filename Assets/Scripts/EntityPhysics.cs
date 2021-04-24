@@ -314,6 +314,9 @@ public class EntityPhysics : MonoBehaviour
       // Only nodes at the left of the entity can collide with left walls
       return node.x == -spriteRenderer.bounds.extents.x;
     }
+    // We have collided with a slope. For now, just allow all nodes to collide
+    // with slopes. Later, we could be smarter about this by considering the
+    // angle of the slope.
     return true;
   }
 
@@ -330,9 +333,9 @@ public class EntityPhysics : MonoBehaviour
     rigidbody.transform.position += (Vector3)escapeVector;
 
     // Adjust velocity
-    if (hit.normal == Vector2.up)
+    if (hit.normal == Vector2.up || hit.normal.y > 0)
     {
-      // Floors
+      // Floors / slopes
       rigidbody.velocity = VectorUtils.SetY(rigidbody.velocity, 0);
       grounded = true;
     }
@@ -349,7 +352,7 @@ public class EntityPhysics : MonoBehaviour
   }
 
   /**
-   * Calculates the distance we need to move in order to escape a solid in which
+   * Calculates the movement vector to apply in order to escape a solid in which
    * we have become embedded, given the collision that should have occurred and
    * knowing where we are now.
    *
@@ -377,6 +380,14 @@ public class EntityPhysics : MonoBehaviour
     // The portion of the journey for which we were embedded in the solid
     Vector2 journeyInSolid = journey.normalized * distanceTravelledInSolid;
 
+    if (ShouldClimbSlope(hit))
+    {
+      // We have collided with a sloped floor. We need to treat this as a
+      // special case, because if we moved the entity in the direction of the
+      // normal then they would slide down the slope (which we don't want).
+      return CalculateCollisionEscapeVectorForSlope(journeyInSolid, hit);
+    }
+
     // Negating `journeyInSolid` gives us the journey we would need to take to
     // get back OUT of the solid. However, we don't want to just retrace our
     // steps - we want to escape in the direction of the collision normal - so
@@ -385,6 +396,48 @@ public class EntityPhysics : MonoBehaviour
 
     // We add a tiny bit extra, just to make sure we are clear of the solid
     return escapeVector + hit.normal * SmallestDistance;
+  }
+
+  /**
+   * Given a journey we have just taken that has embedded us in a slope, and the
+   * collision with that slope, calculates the movement vector to apply in order
+   * to position this entity atop the slope.
+   */
+  private Vector2 CalculateCollisionEscapeVectorForSlope(
+      Vector2 journeyInSlope, RaycastHit2D hit)
+  {
+    // We want to move directly up, so that we are sitting atop the slope. This
+    // means we need to calculate the vertical distance between the endpoint of
+    // our journey and the point directly above it that lies on the surface of
+    // the slope. First we need a vector representing the slope itself
+    Vector2 slope = Vector2.Perpendicular(hit.normal);
+
+    // Flip this vector if necessary, so that it's pointing in the direction of
+    // horizontal travel.
+    if (Mathf.Sign(slope.x) != Mathf.Sign(journeyInSlope.x))
+    {
+      slope = -slope;
+    }
+
+    // To find the desired point on the slope, we need to scale our slope vector
+    // until it covers the same x-distance as `journeyInSlope`.
+    Vector2 scaledSlope = VectorUtils.ScaleToWidth(slope, journeyInSlope.x);
+
+    // We want a vector that connects the endpoint of our journey to the
+    // endpoint of this `scaledSlope` vector. This should point straight up.
+    Vector2 escapeVector = scaledSlope - journeyInSlope;
+
+    // We add a tiny bit extra, just to make sure we are clear of the slope
+    return escapeVector + Vector2.up * SmallestDistance;
+  }
+
+  /**
+   * Given a collision with a slope, determines if it should be ascended.
+   */
+  private bool ShouldClimbSlope(RaycastHit2D hit)
+  {
+    // For now, all slopes can be climbed
+    return hit.normal != Vector2.up && hit.normal.y > 0;
   }
 
   /**
