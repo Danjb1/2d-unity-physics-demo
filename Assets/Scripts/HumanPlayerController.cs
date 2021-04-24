@@ -26,15 +26,15 @@ public class HumanPlayerController : MonoBehaviour
     float dirPressed = Input.GetAxisRaw("Horizontal");
     if (dirPressed < 0)
     {
-      input.DirX = -1;
+      input.DirX = DirX.Left;
     }
     else if (dirPressed > 0)
     {
-      input.DirX = 1;
+      input.DirX = DirX.Right;
     }
     else
     {
-      input.DirX = 0;
+      input.DirX = DirX.None;
     }
   }
 

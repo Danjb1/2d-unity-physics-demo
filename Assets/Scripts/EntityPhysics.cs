@@ -17,18 +17,30 @@ public class EntityPhysics : MonoBehaviour
   private const float Gravity = -1f;
 
   /**
-   * Maximum magnitude of an entity's y-velocity (m/s).
-   *
-   * If this is set too high, entities may pass through thin level geometry.
+   * Absolute change in horizontal velocity to apply each tick as result of
+   * friction, when airborne.
    */
-  private const float MaxSpeedX = 50f;
+  private const float AirFriction = 0.65f;
 
   /**
-   * Maximum magnitude of an entity's y-velocity (m/s).
+   * Absolute change in horizontal velocity to apply each tick as result of
+   * friction, when grounded.
+   */
+  private const float GroundFriction = 1.5f;
+
+  /**
+   * Maximum magnitude of an entity's x-velocity (m/s).
    *
    * If this is set too high, entities may pass through thin level geometry.
    */
-  private const float MaxSpeedY = 5f;
+  private const float MaxSpeedX = 12f;
+
+  /**
+   * Maximum fall speed that can be attained by gravity alone (m/s).
+   *
+   * If this is set too high, entities may pass through thin level geometry.
+   */
+  private const float TerminalVelocity = -14f;
 
   /**
    * The smallest possible distance that matters, as far as our physics are
@@ -41,7 +53,7 @@ public class EntityPhysics : MonoBehaviour
   /**
    * How far a "stuck" entity should move, in the hope of becoming unstuck.
    */
-  private const float UnstuckDistance = 0.25f;
+  private const float UnstuckDistance = 0.15f;
 
   /**
    * Input that governs this entity's movement.
@@ -52,6 +64,14 @@ public class EntityPhysics : MonoBehaviour
    * Rigidbody used to move the entity with collision detection.
    */
   new private Rigidbody2D rigidbody;
+
+  /**
+   * Whether the entity is currently on the ground.
+   *
+   * This flag is cleared at the end of `FixedUpdate`, and set again by any
+   * collisions that follow.
+   */
+  private bool grounded;
 
   /**
    * Position at the end of the previous frame.
@@ -116,32 +136,88 @@ public class EntityPhysics : MonoBehaviour
 
   void FixedUpdate()
   {
-    ApplyInput();
+    ApplyAcceleration();
+    ApplyJump();
     ApplyGravity();
+    ApplyFriction();
     RememberPosition();
     ScheduleMove();
   }
 
   /**
-   * Changes the velocity according to the entity input.
+   * Increases the horizontal velocity according to the entity input.
    */
-  void ApplyInput()
+  private void ApplyAcceleration()
   {
     rigidbody.velocity = VectorUtils.SetX(
       rigidbody.velocity,
-      Mathf.Clamp(rigidbody.velocity.x + input.acceleration * input.DirX,
+      Mathf.Clamp(rigidbody.velocity.x
+          + input.acceleration * input.DirX.GetMultiplier(),
           -MaxSpeedX, MaxSpeedX)
     );
   }
 
   /**
+   * Initiates or continues a jump based on entity input.
+   */
+  private void ApplyJump()
+  {
+    if (grounded && input.JumpHeld)
+    {
+      // Simple jump, for now
+      rigidbody.velocity = VectorUtils.SetY(
+          rigidbody.velocity,
+          rigidbody.velocity.y + 15
+      );
+      grounded = false;
+    }
+  }
+
+  /**
+   * Reduces horizontal velocity according to friction.
+   */
+  private void ApplyFriction()
+  {
+    if (!ShouldApplyFriction())
+    {
+      return;
+    }
+
+    float friction = grounded ? GroundFriction : AirFriction;
+
+    // Apply friction as a drag force in the opposite direction of movement
+    if (rigidbody.velocity.x < 0)
+    {
+      rigidbody.velocity = VectorUtils.SetX(
+          rigidbody.velocity,
+          Mathf.Min(rigidbody.velocity.x + friction, 0)
+      );
+    }
+    else if (rigidbody.velocity.x > 0)
+    {
+      rigidbody.velocity = VectorUtils.SetX(
+          rigidbody.velocity,
+          Mathf.Max(rigidbody.velocity.x - friction, 0)
+      );
+    }
+  }
+
+  private bool ShouldApplyFriction()
+  {
+    // Only apply friction if no direction is held...
+    return rigidbody.velocity.x == 0 ||
+        // ... or we are trying to change direction
+        Mathf.Sign(rigidbody.velocity.x) != input.DirX.GetMultiplier();
+  }
+
+  /**
    * Changes the velocity by applying gravity.
    */
-  void ApplyGravity()
+  private void ApplyGravity()
   {
     rigidbody.velocity = VectorUtils.SetY(
         rigidbody.velocity,
-        Mathf.Clamp(rigidbody.velocity.y + Gravity, -MaxSpeedY, MaxSpeedY)
+        Mathf.Max(rigidbody.velocity.y + Gravity, TerminalVelocity)
     );
   }
 
@@ -151,8 +227,11 @@ public class EntityPhysics : MonoBehaviour
    * This movement will result in the OnTrigger* callbacks below, should we
    * collide with any trigger colliders.
    */
-  void ScheduleMove()
+  private void ScheduleMove()
   {
+    // Reset this flag to prepare for imminent collisions
+    grounded = false;
+
     rigidbody.MovePosition((Vector2)transform.position
         + rigidbody.velocity * Time.fixedDeltaTime);
   }
@@ -201,12 +280,41 @@ public class EntityPhysics : MonoBehaviour
 
       // We only care about collisions with the collider that caused this
       // callback; other colliders can take care of their own collisions.
-      if (hit.collider == other)
+      if (hit.collider == other && CanCollide(node, hit))
       {
         ProcessCollision(hit);
         return;
       }
     }
+  }
+
+  /**
+   * Determines if a collision is valid for the given collision node.
+   */
+  private bool CanCollide(Vector2 node, RaycastHit2D hit)
+  {
+
+    if (hit.normal == Vector2.up)
+    {
+      // Only nodes at the bottom of the entity can collide with floors
+      return node.y == -spriteRenderer.bounds.extents.y;
+    }
+    else if (hit.normal == Vector2.down)
+    {
+      // Only nodes at the top of the entity can collide with ceilings
+      return node.y == spriteRenderer.bounds.extents.y;
+    }
+    else if (hit.normal == Vector2.left)
+    {
+      // Only nodes at the right of the entity can collide with right walls
+      return node.x == spriteRenderer.bounds.extents.x;
+    }
+    else if (hit.normal == Vector2.right)
+    {
+      // Only nodes at the left of the entity can collide with left walls
+      return node.x == -spriteRenderer.bounds.extents.x;
+    }
+    return true;
   }
 
   /**
@@ -222,9 +330,15 @@ public class EntityPhysics : MonoBehaviour
     rigidbody.transform.position += (Vector3)escapeVector;
 
     // Adjust velocity
-    if (hit.normal == Vector2.up || hit.normal == Vector2.down)
+    if (hit.normal == Vector2.up)
     {
-      // Floors / ceilings
+      // Floors
+      rigidbody.velocity = VectorUtils.SetY(rigidbody.velocity, 0);
+      grounded = true;
+    }
+    else if (hit.normal == Vector2.down)
+    {
+      // Ceilings
       rigidbody.velocity = VectorUtils.SetY(rigidbody.velocity, 0);
     }
     else if (hit.normal == Vector2.left || hit.normal == Vector2.right)
