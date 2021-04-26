@@ -6,12 +6,26 @@ public static class CollisionUtils
 {
 
   /**
+   * Determines if the given collision is valid.
+   */
+  public static bool IsCollisionValid(RaycastHit2D hit)
+  {
+    if (hit.collider.gameObject.CompareTag("One Way Platform")
+        && hit.normal != Vector2.up)
+    {
+      // Only collisions with the top of a one-way platform are valid
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * Determines if a collision is valid for the given collision node.
    *
    * `node` is a position relative to the center of the hitbox, and `extents`
    * is the distance from the center of that hitbox to its edges.
    */
-  public static bool CanCollide(
+  public static bool CanNodeCollide(
       Vector2 node, RaycastHit2D hit, Vector2 extents, float slopeTolerance)
   {
     if (IsCollisionWithFloor(hit, slopeTolerance))

@@ -171,7 +171,11 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 3b569635b45372c469c6bfbe5b350355, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  acceleration: 0.7
+  acceleration: 60
+  maxJumpHeight: 0.5
+  maxJumpTime: 0.25
+  airFriction: 40
+  groundFriction: 90
 --- !u!114 &932405850884748258
 MonoBehaviour:
   m_ObjectHideFlags: 0

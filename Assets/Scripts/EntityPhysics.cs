@@ -20,21 +20,9 @@ public class EntityPhysics : MonoBehaviour
   public const float SmallestDistance = 0.0001f;
 
   /**
-   * Change in vertical velocity to apply each tick.
+   * Acceleration due to gravity (m/s^2).
    */
-  private const float Gravity = -1f;
-
-  /**
-   * Absolute change in horizontal velocity to apply each tick as result of
-   * friction, when airborne.
-   */
-  private const float AirFriction = 0.65f;
-
-  /**
-   * Absolute change in horizontal velocity to apply each tick as result of
-   * friction, when grounded.
-   */
-  private const float GroundFriction = 1.5f;
+  private const float Gravity = -60f;
 
   /**
    * Minimum y-component of the normal of a slope in order for it to be
@@ -105,15 +93,51 @@ public class EntityPhysics : MonoBehaviour
    */
   private SpriteRenderer spriteRenderer;
 
+  /**
+   * Whether the entity is currently mid-jump.
+   */
+  private bool jumping;
+
+  /**
+   * How much longer the entity can continue their current jump.
+   */
+  private float remainingJumpTime;
+
+  /**
+   *
+   */
+  private float jumpVelocity;
+
   void Start()
   {
     input = GetComponent<EntityInput>();
     rigidbody = GetComponent<Rigidbody2D>();
     spriteRenderer = GetComponent<SpriteRenderer>();
 
+    // Cache the jump velocity so we don't have to recalculate it every tick.
+    // This will need to be recalculated if the input variables change.
+    jumpVelocity = CalculateJumpVelocity();
+
     // For now, all entities use the same collision nodes, but later we could
     // optimise this by taking into account the size of the entity.
     collisionNodes = CreateCollisionNodes();
+  }
+
+  /**
+   * Calculates the appropriate vertical velocity based on the entity's jump
+   * parameters.
+   */
+  private float CalculateJumpVelocity()
+  {
+    // We use SUVAT equations to find the required jump velocity in order to
+    // reach the desired peak height, given constant gravity.
+    //   s = input.maxJumpHeight
+    //   u = ?
+    //   v = 0
+    //   a = Gravity
+    //   t = ?
+    // :: u = sqrt(pow(v, 2) - 2 * a * s);
+    return Mathf.Sqrt(-2 * Gravity * input.maxJumpHeight);
   }
 
   private Vector2[] CreateCollisionNodes()
@@ -159,8 +183,9 @@ public class EntityPhysics : MonoBehaviour
     rigidbody.velocity = VectorUtils.SetX(
       rigidbody.velocity,
       Mathf.Clamp(rigidbody.velocity.x
-          + input.acceleration * input.DirX.GetMultiplier(),
-          -MaxSpeedX, MaxSpeedX)
+          + input.acceleration * input.DirX.GetMultiplier() * Time.fixedDeltaTime,
+          -MaxSpeedX, MaxSpeedX
+      )
     );
   }
 
@@ -171,13 +196,35 @@ public class EntityPhysics : MonoBehaviour
   {
     if (grounded && input.JumpHeld)
     {
-      // Simple jump, for now
-      rigidbody.velocity = VectorUtils.SetY(
-          rigidbody.velocity,
-          rigidbody.velocity.y + 15
-      );
+      // Start of jump
+      DoJump();
       grounded = false;
+      jumping = true;
     }
+    else if (jumping && input.JumpHeld && remainingJumpTime > 0)
+    {
+      // Continuation of jump
+      DoJump();
+    }
+    else
+    {
+      // When jump is released or the maximum jump time is reached, the jump
+      // ends (and gravity will kick in again)
+      jumping = false;
+    }
+  }
+
+  /**
+   * Applies upwards acceleration to a jumping entity.
+   */
+  private void DoJump()
+  {
+    rigidbody.velocity = VectorUtils.SetY(
+        rigidbody.velocity,
+        jumpVelocity
+    );
+    remainingJumpTime -= Time.fixedDeltaTime;
+    Debug.Log(remainingJumpTime);
   }
 
   /**
@@ -190,21 +237,21 @@ public class EntityPhysics : MonoBehaviour
       return;
     }
 
-    float friction = grounded ? GroundFriction : AirFriction;
+    float friction = grounded ? input.groundFriction : input.airFriction;
 
     // Apply friction as a drag force in the opposite direction of movement
     if (rigidbody.velocity.x < 0)
     {
       rigidbody.velocity = VectorUtils.SetX(
           rigidbody.velocity,
-          Mathf.Min(rigidbody.velocity.x + friction, 0)
+          Mathf.Min(rigidbody.velocity.x + friction * Time.fixedDeltaTime, 0)
       );
     }
     else if (rigidbody.velocity.x > 0)
     {
       rigidbody.velocity = VectorUtils.SetX(
           rigidbody.velocity,
-          Mathf.Max(rigidbody.velocity.x - friction, 0)
+          Mathf.Max(rigidbody.velocity.x - friction * Time.fixedDeltaTime, 0)
       );
     }
   }
@@ -222,9 +269,18 @@ public class EntityPhysics : MonoBehaviour
    */
   private void ApplyGravity()
   {
+    if (jumping)
+    {
+      // Suspend gravity while jumping
+      return;
+    }
+
     rigidbody.velocity = VectorUtils.SetY(
         rigidbody.velocity,
-        Mathf.Max(rigidbody.velocity.y + Gravity, TerminalVelocity)
+        Mathf.Max(
+            rigidbody.velocity.y + Gravity * Time.fixedDeltaTime,
+            TerminalVelocity
+        )
     );
   }
 
@@ -248,22 +304,25 @@ public class EntityPhysics : MonoBehaviour
 
   private void OnTriggerEnter2D(Collider2D other)
   {
-    if (other.gameObject.CompareTag("Solid"))
-    {
-      CollideWithSolid(other);
-    }
+    HandleCollision(other);
   }
 
   private void OnTriggerStay2D(Collider2D other)
   {
-    if (other.gameObject.CompareTag("Solid"))
+    HandleCollision(other);
+  }
+
+  private void HandleCollision(Collider2D other)
+  {
+    if (other.gameObject.CompareTag("Solid")
+        || other.gameObject.CompareTag("One Way Platform"))
     {
       CollideWithSolid(other);
     }
   }
 
   /**
-   * Resolves a collision with the given collider.
+   * Resolves a collision with the given solid collider.
    *
    * In hindsight, it may have been easier to look for collisions BEFORE
    * attempting the movement, but I am too far down the rabbit hole to change it
@@ -290,8 +349,10 @@ public class EntityPhysics : MonoBehaviour
 
       // We only care about collisions with the collider that caused this
       // callback; other colliders can take care of their own collisions.
-      if (hit.collider == other && CollisionUtils.CanCollide(
-          node, hit, spriteRenderer.bounds.extents, SlopeTolerance))
+      if (hit.collider == other
+          && CollisionUtils.IsCollisionValid(hit)
+          && CollisionUtils.CanNodeCollide(
+              node, hit, spriteRenderer.bounds.extents, SlopeTolerance))
       {
         ProcessCollision(hit);
         return;
@@ -329,15 +390,23 @@ public class EntityPhysics : MonoBehaviour
     {
       rigidbody.velocity = VectorUtils.SetY(rigidbody.velocity, 0);
       grounded = true;
+      jumping = false;
+      ReplenishJump();
     }
     else if (CollisionUtils.IsCollisionWithCeiling(hit))
     {
       rigidbody.velocity = VectorUtils.SetY(rigidbody.velocity, 0);
+      jumping = false;
     }
     else if (CollisionUtils.IsCollisionWithWall(hit, SlopeTolerance))
     {
       rigidbody.velocity = VectorUtils.SetX(rigidbody.velocity, 0);
     }
+  }
+
+  private void ReplenishJump()
+  {
+    remainingJumpTime = input.maxJumpTime;
   }
 
 }
